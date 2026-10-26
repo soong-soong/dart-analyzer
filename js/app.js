@@ -76,20 +76,24 @@ async function loadCompany(item) {
   item.loading = true;
   item.error = null;
   render();
-  try {
-    const [company, fin] = await Promise.all([
-      item.company ? Promise.resolve(item.company) : api(`/api/company?corp_code=${item.code}`),
-      api(`/api/financials?corp_code=${item.code}&fs=${state.fs}&year=${state.year}`),
-    ]);
-    item.company = company;
-    item.name = company.corp_name;
-    item.fin = fin;
-    item.ratios = computeRatios(fin, state.basis);
-  } catch (e) {
-    item.error = e.message;
+  // 기업 개황과 재무제표를 따로 처리: 재무제표가 없어도(상장폐지 법인 등) 회사 정보와 안내는 보이게
+  const [company, fin] = await Promise.allSettled([
+    item.company ? Promise.resolve(item.company) : api(`/api/company?corp_code=${item.code}`),
+    api(`/api/financials?corp_code=${item.code}&fs=${state.fs}&year=${state.year}`),
+  ]);
+  if (company.status === "fulfilled") {
+    item.company = company.value;
+    item.name = company.value.corp_name;
+  }
+  if (fin.status === "fulfilled") {
+    item.fin = fin.value;
+    item.ratios = computeRatios(fin.value, state.basis);
+  } else {
+    item.error = fin.reason.message;
     item.fin = null;
     item.ratios = null;
   }
+  if (company.status === "rejected" && !item.error) item.error = company.reason.message;
   item.loading = false;
   render();
   // 지배구조·배당·감사는 화면을 막지 않도록 뒤이어 불러온다
@@ -339,7 +343,7 @@ function renderProfiles() {
         <dt>설립일</dt><dd>${est}</dd>
         ${home ? `<dt>홈페이지</dt><dd><a href="${esc(home)}" target="_blank" rel="noopener">${esc(c.homepage)}</a></dd>` : ""}
       </dl>
-      ${s.error ? `<p class="error">${esc(s.error)}</p>` : ""}
+      ${s.error ? `<p class="error">${esc(s.error)}${c.market === "기타" ? "<br>DART 법인 구분이 '기타'입니다. 상장폐지·합병된 옛 법인일 수 있으니 같은 이름의 다른 회사를 검색해 보세요." : ""}</p>` : ""}
       ${s.fin ? `<p class="muted small">${s.fin.fs_div === "CFS" ? "연결" : "별도"} · ${s.fin.years[0]}~${s.fin.latest_year}년${s.fin.fs_div !== state.fs ? " (연결 없음 → 별도 사용)" : ""}</p>` : ""}
       ${fl.length ? `<ul class="flags">${fl.map((f) => `<li class="${f.level}">${f.level === "warn" ? "🚩" : "ⓘ"} ${esc(f.text)}</li>`).join("")}</ul>` : ""}
       ${links.length ? `<p class="links-row small">${links.join(" · ")}</p>` : ""}

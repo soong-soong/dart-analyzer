@@ -80,9 +80,15 @@ function audits(rows) {
 }
 
 // 보통주 주식 수 (시가총액·주당 지표 계산용)
+// 구분 이름이 회사마다 달라("보통주", "의결권 있는 주식", "의결권 있는\n보통주") 순서대로 찾는다
 function shares(rows) {
-  const r = rows?.find((x) => x.se === "보통주");
-  return r ? { issued: num(r.istc_totqy), treasury: num(r.tesstk_co), outstanding: num(r.distb_stock_co) } : null;
+  const se = (x) => String(x.se || "").replace(/\s/g, "");
+  const r = rows?.find((x) => se(x) === "보통주") || rows?.find((x) => /보통주/.test(se(x)))
+    || rows?.find((x) => /^의결권있는/.test(se(x))) || rows?.find((x) => se(x) === "합계");
+  if (!r) return null;
+  const issued = num(r.istc_totqy), treasury = num(r.tesstk_co);
+  const outstanding = num(r.distb_stock_co) ?? (issued == null ? null : issued - (treasury ?? 0));
+  return outstanding ? { issued, treasury, outstanding } : null;
 }
 
 function employees(rows) {

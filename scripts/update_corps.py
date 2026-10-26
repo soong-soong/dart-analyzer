@@ -49,18 +49,20 @@ def listed_corps() -> list[dict]:
     return corps
 
 
-def load_existing_industry() -> dict[str, str]:
+def load_existing_industry() -> dict[str, tuple[str, str]]:
     if not OUT.exists():
         return {}
     rows = json.loads(OUT.read_text(encoding="utf-8")).get("corps", [])
-    return {r[0]: r[3] for r in rows if len(r) > 3 and r[3]}
+    # 법인구분(corp_cls)까지 저장된 행만 재사용 → 예전 형식 파일이면 한 번 전체를 다시 조회
+    return {r[0]: (r[3], r[4]) for r in rows if len(r) > 4 and r[3] and r[4]}
 
 
-def fetch_industry(corp_code: str) -> str | None:
+def fetch_info(corp_code: str) -> tuple[str, str]:
+    """업종코드와 법인구분(Y 유가증권, K 코스닥, N 코넥스, E 기타=상장폐지·합병된 옛 법인 등)"""
     body = json.loads(get("company.json", corp_code=corp_code))
     if body.get("status") == "020":
         raise RuntimeError("DART 일일 한도 초과")
-    return body.get("induty_code") or ""
+    return body.get("induty_code") or "", body.get("corp_cls") or ""
 
 
 def main() -> None:
@@ -73,13 +75,13 @@ def main() -> None:
     corps = listed_corps()
     print(f"상장사 {len(corps)}곳")
 
-    industry = load_existing_industry()
+    info = load_existing_industry()
     if args.with_industry:
-        todo = [c for c in corps if c["corp_code"] not in industry][: args.max_new]
-        print(f"업종코드 신규 조회 {len(todo)}곳")
+        todo = [c for c in corps if c["corp_code"] not in info][: args.max_new]
+        print(f"업종코드·법인구분 신규 조회 {len(todo)}곳")
         for i, c in enumerate(todo, 1):
             try:
-                industry[c["corp_code"]] = fetch_industry(c["corp_code"])
+                info[c["corp_code"]] = fetch_info(c["corp_code"])
             except RuntimeError as e:
                 print(f"중단: {e} (다음 실행에서 이어서 조회)")
                 break
@@ -89,13 +91,17 @@ def main() -> None:
                 print(f"  {i}/{len(todo)}")
             time.sleep(args.delay)
 
+    # 법인구분 E(기타)는 상장폐지·합병된 옛 법인이라 재무제표가 없다 → 목록에서 제외
+    # (같은 이름의 현재 상장사와 겹쳐 검색 시 혼동을 일으킴. 예: SK 003600 vs 034730)
     rows = sorted(
-        ([c["corp_code"], c["corp_name"], c["stock_code"], industry.get(c["corp_code"], "")] for c in corps),
+        ([c["corp_code"], c["corp_name"], c["stock_code"], *info.get(c["corp_code"], ("", ""))] for c in corps
+         if info.get(c["corp_code"], ("", ""))[1] != "E"),
         key=lambda r: r[1],
     )
+    print(f"옛 법인(E) 제외 후 {len(rows)}곳")
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_text(
-        json.dumps({"updated": date.today().isoformat(), "fields": ["corp_code", "corp_name", "stock_code", "induty_code"], "corps": rows},
+        json.dumps({"updated": date.today().isoformat(), "fields": ["corp_code", "corp_name", "stock_code", "induty_code", "corp_cls"], "corps": rows},
                    ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
