@@ -39,7 +39,8 @@ function isCorpCode(v) {
 // 같은 요청은 CDN에서 하루 캐시 → DART 호출 수와 응답 속도 모두 절약
 function send(res, status, data, cacheSeconds = 0) {
   if (cacheSeconds > 0) {
-    res.setHeader("Cache-Control", `public, s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds}`);
+    // 브라우저는 매번 확인(max-age=0), CDN만 하루 보관 → 새 배포 후 옛 응답이 브라우저에 남지 않음
+    res.setHeader("Cache-Control", `public, max-age=0, s-maxage=${cacheSeconds}, stale-while-revalidate=${cacheSeconds}`);
   }
   res.status(status).json(data);
 }

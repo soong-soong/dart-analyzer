@@ -79,6 +79,12 @@ function audits(rows) {
   return [...byYear.values()];
 }
 
+// 보통주 주식 수 (시가총액·주당 지표 계산용)
+function shares(rows) {
+  const r = rows?.find((x) => x.se === "보통주");
+  return r ? { issued: num(r.istc_totqy), treasury: num(r.tesstk_co), outstanding: num(r.distb_stock_co) } : null;
+}
+
 function employees(rows) {
   if (!rows?.length) return null;
   const count = rows.reduce((s, r) => s + (num(r.sm) ?? 0), 0);
@@ -100,9 +106,10 @@ module.exports = async (req, res) => {
     const year = Number(req.query.year) || new Date().getFullYear() - 1;
     const p = { corp_code, bsns_year: year };
 
-    const [h, m, e, d, a, emp] = await Promise.all([
+    const [h, m, e, d, a, emp, st] = await Promise.all([
       list("hyslrSttus.json", p), list("mrhlSttus.json", p), list("exctvSttus.json", p),
       list("alotMatter.json", p), list("accnutAdtorNmNdAdtOpinion.json", p), list("empSttus.json", p),
+      list("stockTotqySttus.json", p),
     ]);
 
     send(res, 200, {
@@ -113,6 +120,7 @@ module.exports = async (req, res) => {
       dividends: dividends(d),
       audits: audits(a),
       employees: employees(emp),
+      shares: shares(st),
     }, 86400);
   } catch (err) {
     handleError(res, err);

@@ -65,7 +65,9 @@
         <button role="tab" data-tab="stability">안정성·효율성</button>
         <button role="tab" data-tab="gov">지배구조·배당</button>
         <button role="tab" data-tab="statements">재무제표</button>
+        <button type="button" id="printBtn" class="tab-action" title="현재 탭을 인쇄하거나 PDF로 저장">🖨 인쇄·PDF</button>
       </nav>
+      <p class="print-only print-head" id="printHead"></p>
 
       <div id="focusBar" class="focus-bar">
         <label>기업 <select id="focus"></select></label>
@@ -82,6 +84,10 @@
           <div class="card">
             <div class="chart-head">
               <h3>재무 추이</h3>
+              <select id="trendMode" title="강의 3장 6절 추세분석">
+                <option value="amount">금액</option>
+                <option value="index">지수 (첫해=100)</option>
+              </select>
               <select id="metric">
                 <option value="revenue">매출액</option>
                 <option value="grossProfit">매출총이익</option>
@@ -123,6 +129,35 @@
         <h3 class="section-title">ROE 결정요인 비교 <span class="muted small" id="roeCompareNote"></span></h3>
         <div class="card table-wrap"><table id="roeTable" class="tbl"></table></div>
         <p class="muted small">강의 4장: ROE = ROIC + (ROIC − 세후 순차입이자율) × 순재무부채/자기자본. 연결실체(비지배지분 포함) 기준이며, 금융비용에 리스 이자가 포함되므로 재무부채에 리스부채를 포함했습니다. 재무자산 = 현금성자산 + 단기금융상품 + 단기 당기손익-공정가치 금융자산.</p>
+
+        <div class="card">
+          <h3>재무레버리지 시뮬레이터 <span class="muted small" id="simTitle"></span></h3>
+          <p class="muted small">슬라이더를 움직여 보세요. ROIC가 차입이자율보다 높으면 빚이 늘수록 ROE가 오르고, 낮으면 떨어집니다 (강의 4장 "빚을 내서 추가사업을 해서 얻은 이익/손실").</p>
+          <div class="sim">
+            <label>ROIC <input type="range" id="simRoic" min="-10" max="25" step="0.1" /> <output id="simRoicOut"></output></label>
+            <label>세후 순차입이자율 <input type="range" id="simR" min="0" max="10" step="0.1" /> <output id="simROut"></output></label>
+            <label>순재무부채 ÷ 자기자본 <input type="range" id="simLev" min="0" max="3" step="0.01" /> <output id="simLevOut"></output></label>
+            <button type="button" id="simReset">기업 실제값으로</button>
+          </div>
+          <p class="sim-result" id="simResult"></p>
+          <div class="chart-box"><canvas id="simChart"></canvas></div>
+        </div>
+
+        <h3 class="section-title">자기자본 증가 분해 <span class="muted small">강의 3장 5절 · 자기자본증가율 = 지배기업 ROE(기초) + 주주의 순투자율</span></h3>
+        <div class="card table-wrap"><table id="egTable" class="tbl"></table></div>
+        <p class="muted small">ROE는 지배주주 총포괄이익 ÷ 기초 지배주주 자본. 주주의 순투자 = 유상증자 − 배당금 − 자기주식 취득 (현금흐름표). 기타는 연결범위 변동·자본거래 등 나머지입니다.</p>
+
+        <h3 class="section-title">초과이익·EVA <span class="muted small">강의 4장 3절</span></h3>
+        <div class="card">
+          <div class="inputs">
+            <label>무위험이자율 <input type="number" id="rf" step="0.1" /> %</label>
+            <label>시장위험프리미엄 <input type="number" id="mrp" step="0.1" /> %</label>
+            <span class="muted small">기본값은 예시입니다. 국고채 금리와 교재 기준으로 바꾸세요. 베타는 표 안에서 기업별로 입력합니다. 입력값은 이 브라우저에만 저장됩니다.</span>
+          </div>
+          <div class="table-wrap"><table id="vcTable" class="tbl"></table></div>
+          <p class="muted small">자기자본비용 = 무위험이자율 + 베타 × 시장위험프리미엄 (CAPM). 초과이익 = 총포괄이익 − 자기자본비용 × 기초 자본총계. WACC = 자기자본비용·세후순차입이자율을 기초 자기자본·순재무부채로 가중평균. EVA = 세후순영업이익 − WACC × 기초 영업투하자본.
+          ⚠ 토지재평가처럼 기타포괄손익이 큰 해에는 포괄이익 기준 초과이익이 부풀려집니다(예: 롯데쇼핑 2024년). 영업 성과만 보려면 EVA를 함께 보세요.</p>
+        </div>
       </div>
 
       <!-- 손익 브리지 -->
@@ -137,6 +172,14 @@
         <h3 class="section-title">기업 비교 <span class="muted small" id="bridgeCompareNote"></span></h3>
         <div class="card table-wrap"><table id="bridgeCompare" class="tbl"></table></div>
         <p class="muted small">"기타손익 제외 순이익"은 강의 5장 방식의 근사치입니다: 기타수익·기타비용 전체를 일시적 손익으로 보고 세후 금액을 되돌렸습니다. 정확한 지속적 이익은 주석에서 항목별로 판단해야 합니다.</p>
+
+        <h3 class="section-title">기타포괄손익 구성 <span class="muted small" id="ociNote"></span></h3>
+        <div class="card table-wrap"><table id="ociTable" class="tbl"></table></div>
+        <p class="muted small">강의 5장 표 5-5처럼 토지재평가·지분상품 평가손익은 포괄이익을 크게 흔드는 일시적 성격의 손익입니다. 법인세효과 행의 부호는 회사마다 표기가 달라 공시 값 그대로 보여줍니다.</p>
+
+        <h3 class="section-title">시장가치비율 <span class="muted small">강의 3장 7절 · 주가를 입력하세요</span></h3>
+        <div class="card table-wrap"><table id="valTable" class="tbl"></table></div>
+        <p class="muted small">주식 수는 최신 사업보고서의 보통주 유통주식수(자기주식 제외)입니다. 정상화 PER은 기타손익을 일시적으로 보고 제외한 EPS로 계산한 근사치입니다. EPS가 음수면 PER은 표기하지 않습니다(N/A).</p>
       </div>
 
       <!-- 현금흐름 -->
@@ -180,13 +223,26 @@
 
       <!-- 재무제표 -->
       <div class="panel" data-panel="statements" hidden>
-        <p id="sourceLinks" class="muted small"></p>
+        <div class="inputs">
+          <label>보기
+            <select id="stmtMode">
+              <option value="amount">금액 (억원)</option>
+              <option value="common">공통형 (%)</option>
+              <option value="index">추세 지수 (첫해=100)</option>
+            </select>
+          </label>
+          <span id="sourceLinks" class="muted small"></span>
+        </div>
         <div class="card table-wrap"><table id="stmtTable" class="tbl"></table></div>
+        <h3 class="section-title">공통형 재무제표 기업 비교 <span class="muted small">강의 3장 6절 · 손익·현금흐름은 매출액=100, 재무상태표는 총자산=100</span></h3>
+        <div class="card table-wrap"><table id="commonCompare" class="tbl"></table></div>
+        <p class="muted small">규모가 다른 기업을 같은 잣대로 비교합니다. 단, 백화점처럼 매출 인식 방식(총액/순액)이 다르면 매출액 기준 비율도 달라지니 함께 고려하세요.</p>
       </div>
     </section>
   </main>
 
   <footer class="wrap foot muted small">
+    <span class="print-only">출력: <span id="printUrl"></span><br /></span>
     데이터: <a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">금융감독원 DART Open API</a> (사업보고서 본문 재무제표·정기보고서 주요정보) ·
     투자 판단의 근거로 사용하지 마세요. 계정은 IFRS 태그 기준으로 자동 매칭하므로 일부 기업은 값이 비거나 주석과 다를 수 있습니다.
   </footer>

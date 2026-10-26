@@ -180,3 +180,46 @@ input[type="search"] { width: 100%; }
 .mini-tbl th, .mini-tbl td { padding: 4px 6px; }
 .audit { font-size: 0.84rem; margin: 6px 0; }
 .gov-note { grid-column: 1 / -1; }
+
+/* ---- 3차: 비교·시뮬레이터·인쇄 ---- */
+.delta { display: block; font-size: 0.7rem; font-weight: 400; color: var(--muted); }
+.delta.up { color: var(--good); }
+.delta.down { color: var(--bad); }
+.pos { color: var(--good); }
+.neg { color: var(--bad); }
+.tbl td.hl { background: color-mix(in srgb, var(--accent) 14%, transparent); font-weight: 600; }
+.links-row { margin: 8px 0 4px; }
+.inputs { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 10px; }
+.inputs label { font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.inputs input, .cell-input {
+  font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; width: 72px; text-align: right;
+}
+.cell-input.wide { width: 110px; }
+.sim { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); align-items: center; margin: 8px 0; }
+.sim label { font-size: 0.85rem; color: var(--muted); display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+.sim label input { grid-column: 1 / -1; width: 100%; }
+.sim output { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.sim button, .table-tools button {
+  font: inherit; font-size: 0.8rem; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 6px; padding: 4px 10px; cursor: pointer; justify-self: start;
+}
+.sim-result { font-size: 0.95rem; margin: 4px 0 8px; }
+.table-tools { display: flex; justify-content: flex-end; margin-bottom: -6px; }
+.table-tools button { color: var(--muted); }
+.table-tools button:hover, .sim button:hover { color: var(--accent); border-color: var(--accent); }
+.tabs .tab-action { margin-left: auto; color: var(--muted); }
+.print-only { display: none; }
+
+@media print {
+  :root { --bg: #fff; --surface: #fff; --text: #111; --muted: #555; --border: #ccc; }
+  body { background: #fff; font-size: 11px; }
+  .top, .controls, .tabs, .focus-bar, .peers, .table-tools, .sim, #simReset, .links-row, .inputs input, details:not([open]) { display: none !important; }
+  .print-only { display: inline; }
+  .print-head { display: block; font-weight: 600; margin: 0 0 8px; }
+  .card { break-inside: avoid; box-shadow: none; }
+  .chart-box { height: 240px; }
+  .grid2 { grid-template-columns: 1fr 1fr; }
+  .tbl th:first-child, .tbl td:first-child { position: static; }
+  a { color: inherit; text-decoration: none; }
+  .cell-input { border: 0; background: none; padding: 0; }
+}

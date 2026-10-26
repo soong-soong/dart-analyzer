@@ -31,6 +31,7 @@ const ACCOUNTS = {
   netIncomeNci:     { sj: IS, ids: ["ifrs-full_ProfitLossAttributableToNoncontrollingInterests"], names: ["비지배지분순이익", "비지배지분에귀속되는당기순이익(손실)", "비지배지분"] },
   eps:              { sj: IS, ids: ["ifrs-full_BasicEarningsLossPerShare", "ifrs-full_BasicEarningsLossPerShareFromContinuingOperations"], names: ["기본주당이익", "기본주당순이익", "기본주당이익(손실)", "기본주당손익"] },
   comprehensiveIncome: { sj: ["CIS", "IS"], ids: ["ifrs-full_ComprehensiveIncome"], names: ["총포괄손익", "총포괄이익", "당기총포괄이익"] },
+  comprehensiveIncomeOwners: { sj: ["CIS", "IS"], ids: ["ifrs-full_ComprehensiveIncomeAttributableToOwnersOfParent"], names: ["지배기업의소유주에게귀속되는총포괄손익", "지배기업소유주지분포괄손익"] },
 
   // 재무상태표
   totalAssets:      { sj: ["BS"], ids: ["ifrs-full_Assets"], names: ["자산총계"] },
@@ -71,6 +72,8 @@ const ACCOUNTS = {
   interestReceivedOp: { sj: ["CF"], sum: true, abs: true, ids: ["ifrs-full_InterestReceivedClassifiedAsOperatingActivities"] },
   taxesPaid:        { sj: ["CF"], sum: true, prefixes: ["ifrs-full_IncomeTaxesPaidRefund"] },
   dividendsPaid:    { sj: ["CF"], sum: true, abs: true, prefixes: ["ifrs-full_DividendsPaidClassifiedAs"], names: ["배당금지급", "배당금의지급"] },
+  // 지배기업의 유상증자 (종속기업 유상증자는 비지배지분 몫이라 제외)
+  shareIssuance:    { sj: ["CF"], sum: true, abs: true, prefixes: ["ifrs-full_ProceedsFromIssuingShares"], names: ["유상증자", "주식의발행", "신주발행", "유상증자로인한현금유입"], exclude: /종속/ },
   treasuryShares:   { sj: ["CF"], sum: true, abs: true, ids: ["ifrs-full_PurchaseOfTreasuryShares", "dart_AcquisitionOfTreasuryShares"], names: ["자기주식의취득"] },
   leaseRepayment:   { sj: ["CF"], sum: true, abs: true, ids: ["dart_PaymentsOfFinanceLeaseLiabilitiesClassifiedAsFinancingActivities", "ifrs-full_PaymentsOfLeaseLiabilitiesClassifiedAsFinancingActivities"], names: ["리스부채의상환", "리스부채의감소"] },
   debtIssued:       { sj: ["CF"], sum: true, abs: true,
@@ -167,8 +170,22 @@ function cashFlowRows(list, year) {
   });
 }
 
-// 두 보고서의 현금흐름 행을 같은 계정끼리 합친다 (최신 보고서의 행 구성을 기준으로)
-function mergeCashFlow(latest, older) {
+// 기타포괄손익 구성 행 (강의 5장: 재평가·지분상품 평가처럼 일시적 성격이 강한 손익)
+function ociRows(list, year) {
+  const sj = list.some((r) => r.sj_div === "CIS") ? "CIS" : "IS";
+  return list.filter((r) => r.sj_div === sj).sort((a, b) => Number(a.ord) - Number(b.ord))
+    .filter((r) => r.account_id !== "ifrs-full_OtherComprehensiveIncome" && (
+      /OtherComprehensiveIncome|GainsLosses/.test(r.account_id)
+      || (r.account_id.startsWith("-") && /재평가|평가손익|환산|재측정|지분법자본변동|법인세효과/.test(r.account_nm))))
+    .map((r) => {
+      const values = {};
+      for (const [col, back] of COLUMNS) values[year - back] = parseAmount(r[col]);
+      return { section: "oci", total: r.account_id.startsWith("ifrs-full_OtherComprehensiveIncomeThatWill"), id: r.account_id, name: r.account_nm.trim(), values };
+    });
+}
+
+// 두 보고서의 행을 같은 계정끼리 합친다 (최신 보고서의 행 구성을 기준으로)
+function mergeRows(latest, older) {
   const key = (r) => `${r.section}|${r.id.startsWith("-") ? norm(r.name) : r.id}`;
   const map = new Map(latest.map((r) => [key(r), r]));
   for (const r of older || []) {
@@ -234,7 +251,9 @@ module.exports = async (req, res) => {
       currency: latest.list[0].currency || "KRW",
       years,
       data,
-      cashFlow: mergeCashFlow(cashFlowRows(latest.list, latest.year), olderList && cashFlowRows(olderList, latest.year - 3))
+      cashFlow: mergeRows(cashFlowRows(latest.list, latest.year), olderList && cashFlowRows(olderList, latest.year - 3))
+        .map((r) => ({ ...r, values: Object.fromEntries(years.map((y) => [y, r.values[y] ?? null])) })),
+      oci: mergeRows(ociRows(latest.list, latest.year), olderList && ociRows(olderList, latest.year - 3))
         .map((r) => ({ ...r, values: Object.fromEntries(years.map((y) => [y, r.values[y] ?? null])) })),
       sources,
     }, 86400);

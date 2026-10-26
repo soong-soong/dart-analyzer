@@ -10,14 +10,16 @@ export function helpers(fin, basis = "avg") {
   const d = fin.data;
   const v = (k, y) => d[k]?.[y] ?? null;
   const has = (y) => fin.years.includes(y);
-  const bal = (k, y) => {
-    const cur = v(k, y);
-    const prev = has(y - 1) ? v(k, y - 1) : null;
+  // 계산으로 만든 잔액(영업운전자본 등)에도 같은 기준을 적용
+  const balOf = (fn, y) => {
+    const cur = fn(y);
+    const prev = has(y - 1) ? fn(y - 1) : null;
     if (basis === "end") return cur;
     if (basis === "begin") return prev;
     if (cur == null) return null;
     return prev == null ? cur : (cur + prev) / 2;
   };
+  const bal = (k, y) => balOf((yy) => v(k, yy), y);
   // 실효세율 = 법인세비용 / 세전이익. 적자·이상치면 강의 예시의 24.2% 사용
   const taxRate = (y) => {
     const pt = v("pretaxIncome", y), tx = v("incomeTax", y);
@@ -27,7 +29,7 @@ export function helpers(fin, basis = "avg") {
     }
     return 0.242;
   };
-  return { v, bal, has, taxRate };
+  return { v, bal, balOf, has, taxRate };
 }
 
 export const div = (a, b) => (a == null || b == null || b === 0 ? null : a / b);

@@ -137,6 +137,65 @@ export function dupont(fin, y, basis) {
   return { margin, turnover, roa: margin == null || turnover == null ? null : margin * turnover };
 }
 
+/** 강의 3장 5절: 자기자본증가율 = 지배기업 ROE(기초 기준, 포괄이익) + 주주의 순투자율 (+ 기타) */
+export function equityGrowth(fin, y) {
+  const { v } = helpers(fin);
+  if (!fin.years.includes(y - 1)) return null;
+  const e0 = v("equityOwners", y - 1) ?? v("totalEquity", y - 1);
+  const e1 = v("equityOwners", y) ?? v("totalEquity", y);
+  if (!e0 || e1 == null) return null;
+  const ci = v("comprehensiveIncomeOwners", y) ?? v("comprehensiveIncome", y);
+  const investment = (v("shareIssuance", y) ?? 0) - (v("dividendsPaid", y) ?? 0) - (v("treasuryShares", y) ?? 0);
+  const growthRate = ((e1 - e0) / e0) * 100;
+  const roe = ci == null ? null : (ci / e0) * 100;
+  const netInvest = (investment / e0) * 100;
+  return { e0, e1, growthRate, roe, netInvest, other: roe == null ? null : growthRate - roe - netInvest };
+}
+
+/**
+ * 강의 4장 3절: 초과이익 = 포괄이익 − 자기자본비용 × 기초 자기자본, EVA = 세후순영업이익 − WACC × 기초 영업투하자본
+ * @param inputs { rf, mrp, beta } 단위 %·배
+ */
+export function valueCreation(fin, y, { rf, mrp, beta }) {
+  const { v } = helpers(fin);
+  if (!fin.years.includes(y - 1) || [rf, mrp, beta].some((x) => x == null || !Number.isFinite(x))) return null;
+  const re = rf + beta * mrp; // CAPM (%)
+  const e0 = v("totalEquity", y - 1);
+  const ci = v("comprehensiveIncome", y) ?? v("netIncome", y);
+  if (!e0 || ci == null) return null;
+  const excess = ci - (re / 100) * e0;
+  const tree = roeTree(fin, y, "begin"); // 기초 잔액 기준
+  let wacc = null, eva = null;
+  if (tree) {
+    wacc = tree.nfd > 0 && tree.r != null ? (re * tree.equity + tree.r * tree.nfd) / tree.ic : re;
+    eva = tree.nopat - (wacc / 100) * tree.ic;
+  }
+  return { re, roeBegin: (ci / e0) * 100, excess, wacc, roicBegin: tree?.roic ?? null, eva, ic: tree?.ic ?? null };
+}
+
+/** 강의 3장 7절 시장가치비율. price: 원, shares: 보통주 유통주식수 (최신 사업보고서) */
+export function valuation(fin, y, price, shares) {
+  const { v, taxRate } = helpers(fin);
+  if (!price || !shares) return null;
+  const mcap = price * shares;
+  const eps = v("eps", y);
+  const owners = v("netIncomeOwners", y) ?? v("netIncome", y);
+  const otherNet = (v("otherIncome", y) ?? 0) - (v("otherExpense", y) ?? 0);
+  const coreEps = owners == null ? null : (owners - otherNet * (1 - taxRate(y))) / shares;
+  const equity = v("equityOwners", y) ?? v("totalEquity", y);
+  const debt = sum(v("borrowings", y), v("leaseLiabilities", y));
+  const nfd = debt == null ? null : debt - (v("financialAssets", y) ?? 0);
+  const rev = v("revenue", y);
+  return {
+    mcap, eps, coreEps,
+    per: eps > 0 ? price / eps : null,
+    perCore: coreEps > 0 ? price / coreEps : null,
+    pbr: div(mcap, equity),
+    psr: div(mcap, rev),
+    evSales: nfd == null ? null : div(mcap + nfd, rev),
+  };
+}
+
 /** 이익의 질·재무 경보 (강의 2장 이익조정, 3장 운전자본) */
 export function flags(fin, y) {
   const { v } = helpers(fin);
@@ -158,5 +217,26 @@ export function flags(fin, y) {
   if (revG != null && arG != null && arG - revG > 10) out.push({ level: "warn", text: `매출채권 증가율(${arG.toFixed(0)}%)이 매출 증가율(${revG.toFixed(0)}%)보다 10%p 이상 높음` });
   const wc = sum(v("receivables", y), v("inventories", y)) - (v("payables", y) ?? 0);
   if (v("payables", y) != null && wc < 0) out.push({ level: "info", text: "영업운전자본(매출채권+재고−매입채무)이 음수 → 회전율·현금전환주기 해석 주의" });
+  const ci = v("comprehensiveIncome", y);
+  if (ci != null && ni != null) {
+    const oci = ci - ni;
+    if (Math.abs(oci) >= Math.max(500 * EOK, Math.abs(ni) * 0.5)) {
+      out.push({ level: "warn", text: `기타포괄손익 ${Math.round(oci / EOK).toLocaleString("ko-KR")}억 (순이익 ${Math.round(ni / EOK).toLocaleString("ko-KR")}억) → 재평가·평가손익 확인 ('손익 브리지' 탭)` });
+    }
+  }
+  return out;
+}
+
+/** 지배구조 정보 기반 경보: 감사인 교체, 비적정 의견 */
+export function auditFlags(gov) {
+  const out = [];
+  const a = gov?.audits;
+  if (!a?.length) return out;
+  if (a.some((x) => x.opinion && !/^적정/.test(x.opinion))) out.push({ level: "warn", text: `감사의견 비적정: ${a.filter((x) => !/^적정/.test(x.opinion)).map((x) => `${x.period} ${x.opinion}`).join(", ")}` });
+  for (let i = 0; i < a.length - 1; i++) {
+    if (a[i].auditor && a[i + 1].auditor && a[i].auditor !== a[i + 1].auditor) {
+      out.push({ level: "info", text: `감사인 교체: ${a[i + 1].auditor} → ${a[i].auditor} (${a[i].period}). 주기적 지정감사일 수도 있으니 사유 확인` });
+    }
+  }
   return out;
 }

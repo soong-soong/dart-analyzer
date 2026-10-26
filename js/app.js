@@ -1,6 +1,6 @@
 import { industryName, isFinancial } from "./ksic.js";
 import { RATIOS, computeRatios } from "./ratios.js";
-import { bridge, cashFlow, roeTree, dupont, flags } from "./analysis.js";
+import { bridge, cashFlow, roeTree, dupont, flags, auditFlags, equityGrowth, valueCreation, valuation } from "./analysis.js";
 import { esc, eok, eokLabel, fmt } from "./core.js";
 
 const MAX = 4;
@@ -20,8 +20,23 @@ const STATEMENT_ROWS = [
   ["operatingCashFlow", "영업활동현금흐름"], ["investingCashFlow", "투자활동현금흐름"], ["financingCashFlow", "재무활동현금흐름"],
 ];
 
+// 공통형 재무제표의 분모: 손익·현금흐름은 매출액, 재무상태표는 총자산
+const ROW_BASE = Object.fromEntries(STATEMENT_ROWS.map(([k]) => [k,
+  ["totalAssets", "currentAssets", "cash", "financialAssets", "receivables", "inventories", "ppe", "rightOfUse", "totalLiabilities",
+    "currentLiabilities", "payables", "borrowings", "leaseLiabilities", "totalEquity", "equityOwners"].includes(k) ? "totalAssets" : "revenue"]));
+
+const TAB_LABEL = { ratios: "재무비율", profit: "수익성 분해", bridge: "손익 브리지", cash: "현금흐름", stability: "안정성·효율성", gov: "지배구조·배당", statements: "재무제표" };
+
 const $ = (id) => document.getElementById(id);
 const toEok = (won) => (won == null ? null : won / 1e8);
+
+// 사용자가 입력하는 값(무위험이자율·베타·주가)은 이 브라우저에만 저장
+const PREFS_KEY = "dart-analyzer:prefs";
+const prefs = (() => {
+  const base = { rf: 3, mrp: 5, beta: {}, price: {} };
+  try { return { ...base, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; } catch { return base; }
+})();
+const savePrefs = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* 저장 불가 환경 */ } };
 
 const state = {
   corps: [],          // [corp_code, corp_name, stock_code, induty_code]
@@ -229,6 +244,19 @@ function waterfall(id, items) {
   });
 }
 
+/** 과거의 나와 비교 (강의 3장 시계열 비교): 직전 최대 5년 평균 대비 변화 */
+function histDelta(s, r) {
+  const y = yearFor(s);
+  const cur = s.ratios[r.key][y];
+  const past = s.fin.years.filter((yy) => yy < y).slice(-5).map((yy) => s.ratios[r.key][yy]).filter((x) => x != null && Number.isFinite(x));
+  if (cur == null || past.length < 2) return "";
+  const avg = past.reduce((a, b) => a + b, 0) / past.length;
+  const d = cur - avg;
+  const good = r.better === "high" ? d > 0 : d < 0;
+  const size = r.unit === "%" ? `${Math.abs(d).toFixed(1)}%p` : fmt(Math.abs(d), r.unit);
+  return `<span class="delta ${good ? "up" : "down"}" title="과거 ${past.length}년 평균 ${fmt(avg, r.unit)} 대비">${d >= 0 ? "▲" : "▼"}${size}</span>`;
+}
+
 /** 비율 비교표: 그룹별 행, 회사별 열, 가장 좋은 값 강조 */
 function ratioTable(tableId, groups) {
   const items = loaded();
@@ -240,7 +268,7 @@ function ratioTable(tableId, groups) {
     const vals = items.map((s) => s.ratios[r.key][yearFor(s)]);
     const valid = vals.filter((v) => v != null && Number.isFinite(v));
     const best = items.length > 1 && valid.length > 1 ? (r.better === "high" ? Math.max(...valid) : Math.min(...valid)) : null;
-    html += `<tr><td><span class="formula" title="${esc(r.formula)}">${r.label}</span></td>${vals.map((v) => `<td class="${v === best ? "best" : ""}">${fmt(v, r.unit)}</td>`).join("")}</tr>`;
+    html += `<tr><td><span class="formula" title="${esc(r.formula)}">${r.label}</span></td>${vals.map((v, i) => `<td class="${v === best ? "best" : ""}">${fmt(v, r.unit)}${histDelta(items[i], r)}</td>`).join("")}</tr>`;
   }
   $(tableId).innerHTML = html + "</tbody>";
 }
@@ -293,7 +321,13 @@ function renderProfiles() {
     const peers = peersOf(c);
     const est = c.est_dt ? `${c.est_dt.slice(0, 4)}.${c.est_dt.slice(4, 6)}.${c.est_dt.slice(6, 8)}` : "–";
     const home = c.homepage ? (c.homepage.startsWith("http") ? c.homepage : `http://${c.homepage}`) : null;
-    const fl = s.fin ? flags(s.fin, yearFor(s)) : [];
+    const fl = [...(s.fin ? flags(s.fin, yearFor(s)) : []), ...auditFlags(s.gov)];
+    const latestReport = s.fin?.sources?.[s.fin.latest_year];
+    const links = [
+      c.stock_code && `<a href="https://finance.naver.com/item/main.naver?code=${esc(c.stock_code)}" target="_blank" rel="noopener">네이버 증권</a>`,
+      c.stock_code && `<a href="https://finance.naver.com/research/company_list.naver?searchType=itemCode&itemCode=${esc(c.stock_code)}" target="_blank" rel="noopener">애널리스트 리포트</a>`,
+      latestReport && `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${esc(latestReport)}" target="_blank" rel="noopener">최근 사업보고서</a>`,
+    ].filter(Boolean);
     return `<div class="card profile" style="--c:${s.color}">
       <h3><span>${esc(c.corp_name)}</span><span class="badge">${esc(c.market)} ${esc(c.stock_code)}</span></h3>
       <div class="industry">
@@ -307,7 +341,8 @@ function renderProfiles() {
       </dl>
       ${s.error ? `<p class="error">${esc(s.error)}</p>` : ""}
       ${s.fin ? `<p class="muted small">${s.fin.fs_div === "CFS" ? "연결" : "별도"} · ${s.fin.years[0]}~${s.fin.latest_year}년${s.fin.fs_div !== state.fs ? " (연결 없음 → 별도 사용)" : ""}</p>` : ""}
-      ${fl.length ? `<ul class="flags">${fl.map((f) => `<li class="${f.level}">${f.level === "warn" ? "🚩" : "ⓘ"} ${esc(f.text)} <span class="muted">(${yearFor(s)})</span></li>`).join("")}</ul>` : ""}
+      ${fl.length ? `<ul class="flags">${fl.map((f) => `<li class="${f.level}">${f.level === "warn" ? "🚩" : "ⓘ"} ${esc(f.text)}</li>`).join("")}</ul>` : ""}
+      ${links.length ? `<p class="links-row small">${links.join(" · ")}</p>` : ""}
       ${isFinancial(c.induty_code) ? `<p class="muted small">금융업은 매출·영업이익 구조가 달라 일부 비율이 비어 있을 수 있습니다.</p>` : ""}
       <div class="muted small">동종 업종 상장사</div>
       <div class="peers">${peers.length
@@ -325,13 +360,19 @@ function renderRatios() {
   if (!items.length) return;
   const years = [...new Set(items.flatMap((s) => s.fin.years))].sort();
   const metric = $("metric").value;
+  const asIndex = $("trendMode").value === "index";
   chart("trendChart", {
     type: "line",
-    data: { labels: years, datasets: items.map((s) => ({
-      label: s.name, borderColor: s.color, backgroundColor: s.color, tension: 0.25, spanGaps: true,
-      data: years.map((y) => { const v = s.fin.data[metric]?.[y]; return v == null ? null : v / 1e8; }),
-    })) },
-    options: baseOptions(eokLabel),
+    data: { labels: years, datasets: items.map((s) => {
+      const series = years.map((y) => s.fin.data[metric]?.[y] ?? null);
+      const first = series.find((x) => x != null);
+      return {
+        label: s.name, borderColor: s.color, backgroundColor: s.color, tension: 0.25, spanGaps: true,
+        // 추세 지수: 첫해 값을 100으로 (첫해가 0 이하이면 지수를 만들 수 없음)
+        data: asIndex ? series.map((x) => (x == null || !(first > 0) ? null : (x / first) * 100)) : series.map(toEok),
+      };
+    }) },
+    options: baseOptions(asIndex ? (v) => (v == null ? "–" : Number(v).toFixed(0)) : eokLabel),
   });
   const r = RATIOS.find((x) => x.key === $("ratioSel").value);
   chart("ratioChart", {
@@ -411,6 +452,88 @@ function renderProfit() {
   $("roeTable").innerHTML = `<thead><tr><th>항목</th>${headCells(items)}</tr></thead><tbody>${
     rows.map(([label, f]) => `<tr><td>${label.replace(/^ {2}/, "&nbsp;&nbsp;└ ")}</td>${trees.map((x) => `<td>${x ? f(x) : "–"}</td>`).join("")}</tr>`).join("")
   }</tbody>`;
+
+  // 재무레버리지 시뮬레이터: 기업이나 연도가 바뀌면 그 회사 실제값으로 초기화
+  $("simTitle").textContent = f ? `시작값: ${f.name} ${fy}년` : "";
+  const key = f ? `${f.code}|${fy}|${state.basis}` : null;
+  if (key !== simKey) {
+    simKey = key;
+    const clamp = (x, lo, hi, d) => (x == null || !Number.isFinite(x) ? d : Math.min(hi, Math.max(lo, x)));
+    $("simRoic").value = clamp(t?.roic, -10, 25, 5);
+    $("simR").value = clamp(t?.r, 0, 10, 3);
+    $("simLev").value = clamp(t?.lev, 0, 3, 0.5);
+  }
+  drawSim();
+
+  // 자기자본 증가 분해 (3장 5절)
+  const egs = items.map((s) => equityGrowth(s.fin, yearFor(s)));
+  const egRows = [
+    ["기초 지배주주 자본", (x) => eokLabel(toEok(x.e0))],
+    ["기말 지배주주 자본", (x) => eokLabel(toEok(x.e1))],
+    ["자기자본 증가율", (x) => fmt(x.growthRate, "%")],
+    ["= 지배기업 ROE (포괄이익, 기초)", (x) => fmt(x.roe, "%")],
+    ["+ 주주의 순투자율", (x) => fmt(x.netInvest, "%")],
+    ["+ 기타 (연결범위·자본거래 등)", (x) => fmt(x.other, "%")],
+  ];
+  $("egTable").innerHTML = `<thead><tr><th>항목</th>${headCells(items)}</tr></thead><tbody>${
+    egRows.map(([label, g], i) => `<tr class="${i === 2 ? "strong" : ""}"><td>${label}</td>${egs.map((x) => `<td>${x ? g(x) : "–"}</td>`).join("")}</tr>`).join("")
+  }</tbody>`;
+
+  // 초과이익·EVA (4장 3절)
+  $("rf").value = prefs.rf;
+  $("mrp").value = prefs.mrp;
+  const vcs = items.map((s) => valueCreation(s.fin, yearFor(s), { rf: prefs.rf, mrp: prefs.mrp, beta: prefs.beta[s.code] ?? 1 }));
+  const verdict = (x) => (x == null ? "–" : x >= 0 ? `<span class="pos">가치 창출</span>` : `<span class="neg">가치 훼손</span>`);
+  const vcRows = [
+    ["자기자본비용 (CAPM)", (x) => fmt(x.re, "%")],
+    ["ROE (포괄이익, 기초 자본)", (x) => fmt(x.roeBegin, "%")],
+    ["초과이익", (x) => eokLabel(toEok(x.excess)), true],
+    ["  판정", (x) => verdict(x.excess)],
+    ["WACC", (x) => fmt(x.wacc, "%")],
+    ["ROIC (기초 영업투하자본)", (x) => fmt(x.roicBegin, "%")],
+    ["EVA", (x) => eokLabel(toEok(x.eva)), true],
+    ["  판정", (x) => verdict(x.eva)],
+  ];
+  $("vcTable").innerHTML = `<thead><tr><th>항목</th>${headCells(items)}</tr></thead><tbody>
+    <tr><td>베타</td>${items.map((s) => `<td><input class="cell-input" type="number" step="0.05" data-beta="${s.code}" value="${prefs.beta[s.code] ?? 1}" aria-label="${esc(s.name)} 베타" /></td>`).join("")}</tr>
+    ${vcRows.map(([label, g, strong]) => `<tr class="${strong ? "strong" : ""}"><td>${label.replace(/^ {2}/, "&nbsp;&nbsp;└ ")}</td>${vcs.map((x) => `<td>${x ? g(x) : "–"}</td>`).join("")}</tr>`).join("")}
+  </tbody>`;
+}
+
+let simKey = null;
+function drawSim() {
+  const roic = Number($("simRoic").value), r = Number($("simR").value), lev = Number($("simLev").value);
+  const roe = roic + (roic - r) * lev;
+  $("simRoicOut").textContent = `${roic.toFixed(1)}%`;
+  $("simROut").textContent = `${r.toFixed(1)}%`;
+  $("simLevOut").textContent = `${lev.toFixed(2)}배`;
+  $("simResult").innerHTML = `ROE = ${roic.toFixed(1)}% + (${roic.toFixed(1)}% − ${r.toFixed(1)}%) × ${lev.toFixed(2)} = <strong>${roe.toFixed(1)}%</strong>
+    <span class="${roic >= r ? "pos" : "neg"}">재무레버리지효과 ${fmt((roic - r) * lev, "%p")}</span>`;
+  const xs = Array.from({ length: 31 }, (_, i) => i / 10);
+  const line = xs.map((x) => ({ x, y: roic + (roic - r) * x }));
+  const { accent, text, grid } = themeColors();
+  if (charts.simChart) {
+    charts.simChart.data.datasets[0].data = line;
+    charts.simChart.data.datasets[1].data = [{ x: lev, y: roe }];
+    charts.simChart.update("none");
+    return;
+  }
+  chart("simChart", {
+    type: "scatter",
+    data: { datasets: [
+      { label: "ROE (부채비율에 따라)", data: line, showLine: true, pointRadius: 0, borderColor: accent, borderWidth: 2 },
+      { label: "현재 위치", data: [{ x: lev, y: roe }], pointRadius: 7, backgroundColor: accent },
+    ] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { labels: { color: text, boxWidth: 12 } },
+        tooltip: { callbacks: { label: (ctx) => `순재무부채/자기자본 ${ctx.parsed.x.toFixed(2)}배 → ROE ${ctx.parsed.y.toFixed(1)}%` } } },
+      scales: {
+        x: { title: { display: true, text: "순재무부채 ÷ 자기자본 (배)", color: text }, min: 0, max: 3, ticks: { color: text }, grid: { color: grid } },
+        y: { title: { display: true, text: "ROE (%)", color: text }, ticks: { color: text, callback: (v) => `${v}%` }, grid: { color: grid } },
+      },
+    },
+  });
 }
 
 // --- 손익 브리지 탭 (강의 5장)
@@ -454,6 +577,8 @@ function renderBridge() {
     ["당기순이익", (y) => v("netIncome", y), true],
     ["지배주주 순이익", (y) => v("netIncomeOwners", y), true],
     ["기타손익 제외 순이익(근사)", (y, i) => per[i]?.coreNi ?? null],
+    ["기타포괄손익", (y) => (v("comprehensiveIncome", y) == null || v("netIncome", y) == null ? null : v("comprehensiveIncome", y) - v("netIncome", y))],
+    ["총포괄이익", (y) => v("comprehensiveIncome", y), true],
   ];
   $("bridgeTable").innerHTML = `<thead><tr><th>항목</th>${ys.map((y) => `<th>${y}</th>`).join("")}</tr></thead><tbody>${
     rows.filter(([, g]) => ys.some((y, i) => g(y, i) != null)).map(([label, g, strong]) =>
@@ -475,6 +600,34 @@ function renderBridge() {
   $("bridgeCompare").innerHTML = `<thead><tr><th>항목</th>${headCells(items)}</tr></thead><tbody>${
     crow.map(([label, g]) => `<tr><td>${label}</td>${bs.map((b) => `<td>${b ? g(b) : "–"}</td>`).join("")}</tr>`).join("")
   }</tbody>`;
+
+  // 기타포괄손익 구성 (5장)
+  const oci = (f.fin.oci || []).filter((r) => ys.some((y) => r.values[y]));
+  const biggest = oci.filter((r) => !r.total && !/법인세/.test(r.name)).sort((a, c) => Math.abs(c.values[fy] ?? 0) - Math.abs(a.values[fy] ?? 0))[0];
+  $("ociNote").textContent = `${f.name} · 단위 억원${biggest?.values[fy] ? ` · ${fy}년 가장 큰 항목: ${biggest.name} ${eokLabel(toEok(biggest.values[fy]))}` : ""}`;
+  $("ociTable").innerHTML = !oci.length ? `<tbody><tr><td class="muted">기타포괄손익 항목이 없습니다.</td></tr></tbody>` :
+    `<thead><tr><th>항목</th>${ys.map((y) => `<th>${y}</th>`).join("")}</tr></thead><tbody>${
+      oci.map((r) => `<tr class="${r.total ? "strong" : ""}"><td>${esc(r.name)}</td>${ys.map((y) => `<td class="${r === biggest && y === fy ? "hl" : ""}">${eok(r.values[y])}</td>`).join("")}</tr>`).join("")
+    }<tr class="strong"><td>기타포괄손익 합계 (총포괄이익 − 당기순이익)</td>${ys.map((y) => { const ci = v("comprehensiveIncome", y), ni = v("netIncome", y); return `<td>${ci == null || ni == null ? "–" : eok(ci - ni)}</td>`; }).join("")}</tr></tbody>`;
+
+  // 시장가치비율 (3장 7절)
+  const vals = items.map((s) => valuation(s.fin, yearFor(s), prefs.price[s.code], s.gov?.shares?.outstanding));
+  const perTxt = (x) => (x == null ? "N/A" : fmt(x, "배"));
+  const vrows = [
+    ["유통주식수 (보통주)", (s) => (s.gov?.shares?.outstanding ? `${s.gov.shares.outstanding.toLocaleString("ko-KR")}주` : s.gov ? "–" : "불러오는 중")],
+    ["시가총액", (s, x) => (x ? eokLabel(toEok(x.mcap)) : "–")],
+    ["EPS (공시)", (s, x) => (x?.eps == null ? "–" : `${x.eps.toLocaleString("ko-KR")}원`)],
+    ["PER", (s, x) => (x ? perTxt(x.per) : "–")],
+    ["정상화 EPS (기타손익 제외, 근사)", (s, x) => (x?.coreEps == null ? "–" : `${Math.round(x.coreEps).toLocaleString("ko-KR")}원`)],
+    ["정상화 PER", (s, x) => (x ? perTxt(x.perCore) : "–")],
+    ["PBR", (s, x) => (x ? fmt(x.pbr, "배") : "–")],
+    ["PSR", (s, x) => (x ? fmt(x.psr, "배") : "–")],
+    ["EV / 매출액", (s, x) => (x ? fmt(x.evSales, "배") : "–")],
+  ];
+  $("valTable").innerHTML = `<thead><tr><th>항목</th>${headCells(items)}</tr></thead><tbody>
+    <tr><td>주가 (원)</td>${items.map((s) => `<td><input class="cell-input wide" type="number" step="100" min="0" data-price="${s.code}" value="${prefs.price[s.code] ?? ""}" placeholder="예: 150000" aria-label="${esc(s.name)} 주가" /></td>`).join("")}</tr>
+    ${vrows.map(([label, g]) => `<tr><td>${label}</td>${items.map((s, i) => `<td>${g(s, vals[i])}</td>`).join("")}</tr>`).join("")}
+  </tbody>`;
 }
 
 // --- 현금흐름 탭 (강의 6장)
@@ -617,10 +770,55 @@ function renderStatements() {
   const rcepts = [...new Set(ys.map((y) => f.fin.sources?.[y]).filter(Boolean))];
   $("sourceLinks").innerHTML = `${esc(f.name)} ${f.fin.fs_div === "CFS" ? "연결" : "별도"} · 공시 원문: ${
     rcepts.map((r) => `<a href="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=${r}" target="_blank" rel="noopener">${ys.filter((y) => f.fin.sources[y] === r).join("·")}년 보고서</a>`).join(" · ")}`;
-  $("stmtTable").innerHTML = `<thead><tr><th>계정 (억원)</th>${ys.map((y) => `<th>${y}</th>`).join("")}</tr></thead><tbody>${
-    STATEMENT_ROWS.filter(([k]) => ys.some((y) => f.fin.data[k]?.[y] != null))
-      .map(([k, label]) => `<tr><td>${label}</td>${ys.map((y) => `<td>${eok(f.fin.data[k][y])}</td>`).join("")}</tr>`).join("")
+  const mode = $("stmtMode").value;
+  const d = f.fin.data;
+  const common = (fin, k, y) => { const base = fin.data[ROW_BASE[k]]?.[y]; const x = fin.data[k]?.[y]; return x == null || !base ? null : (x / base) * 100; };
+  const cell = (k, y) => {
+    if (mode === "common") return fmt(common(f.fin, k, y), "%");
+    if (mode === "index") {
+      const first = ys.map((yy) => d[k]?.[yy]).find((x) => x != null);
+      const x = d[k]?.[y];
+      return x == null || !(first > 0) ? "–" : ((x / first) * 100).toFixed(0);
+    }
+    return eok(d[k][y]);
+  };
+  const unitLabel = { amount: "억원", common: "%", index: `${ys[0]}=100` }[mode];
+  $("stmtTable").innerHTML = `<thead><tr><th>계정 (${unitLabel})</th>${ys.map((y) => `<th>${y}</th>`).join("")}</tr></thead><tbody>${
+    STATEMENT_ROWS.filter(([k]) => ys.some((y) => d[k]?.[y] != null))
+      .map(([k, label]) => `<tr><td>${label}</td>${ys.map((y) => `<td>${cell(k, y)}</td>`).join("")}</tr>`).join("")
   }</tbody>`;
+
+  // 공통형 기업 비교 (3장 6절)
+  const items = loaded();
+  $("commonCompare").innerHTML = `<thead><tr><th>계정 (%)</th>${headCells(items)}</tr></thead><tbody>${
+    STATEMENT_ROWS.filter(([k]) => k !== "revenue" && k !== "totalAssets" && items.some((s) => s.fin.data[k]?.[yearFor(s)] != null))
+      .map(([k, label]) => `<tr><td>${label} <span class="muted small">÷ ${ROW_BASE[k] === "revenue" ? "매출" : "총자산"}</span></td>${
+        items.map((s) => `<td>${fmt(common(s.fin, k, yearFor(s)), "%")}</td>`).join("")}</tr>`).join("")
+  }</tbody>`;
+}
+
+/** 표를 엑셀에서 열리는 CSV로 저장 (입력칸은 입력값으로) */
+function downloadCsv(tableId) {
+  const table = $(tableId);
+  const rows = [...table.querySelectorAll("tr")].map((tr) => [...tr.children].map((td) => {
+    const input = td.querySelector("input");
+    const text = (input ? input.value : td.innerText).replace(/\s+/g, " ").trim();
+    return `"${text.replace(/"/g, '""')}"`;
+  }).join(","));
+  const names = loaded().map((s) => s.name.replace(/[()㈜주식회사\s]/g, "")).join("_");
+  const blob = new Blob(["﻿" + rows.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${names || "dart"}_${TAB_LABEL[state.tab]}_${tableId}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function printReport() {
+  const items = loaded();
+  $("printHead").textContent = `${TAB_LABEL[state.tab]} · ${items.map((s) => `${s.name} ${yearFor(s)}`).join(", ")} · ${state.fs === "CFS" ? "연결" : "별도"} · 잔액 기준 ${$("basis").selectedOptions[0].textContent} · 출력일 ${new Date().toLocaleDateString("ko-KR")}`;
+  $("printUrl").textContent = location.href;
+  window.print();
 }
 
 // ---------- 시작 ----------
@@ -639,7 +837,35 @@ function setupControls() {
     render();
   });
   $("metric").addEventListener("change", render);
+  $("trendMode").addEventListener("change", render);
   $("ratioSel").addEventListener("change", render);
+  $("stmtMode").addEventListener("change", render);
+  for (const id of ["rf", "mrp"]) {
+    $(id).addEventListener("change", (e) => { const x = parseFloat(e.target.value); if (Number.isFinite(x)) { prefs[id] = x; savePrefs(); } render(); });
+  }
+  // 표 안의 베타·주가 입력칸 (입력을 마치고 칸을 벗어나면 다시 계산)
+  document.addEventListener("change", (e) => {
+    const el = e.target;
+    const kind = el.dataset?.beta ? "beta" : el.dataset?.price ? "price" : null;
+    if (!kind) return;
+    const code = el.dataset[kind];
+    const x = parseFloat(el.value);
+    if (Number.isFinite(x) && x > (kind === "price" ? 0 : -5)) prefs[kind][code] = x; else delete prefs[kind][code];
+    savePrefs();
+    render();
+  });
+  for (const id of ["simRoic", "simR", "simLev"]) $(id).addEventListener("input", drawSim);
+  $("simReset").addEventListener("click", () => { simKey = null; render(); });
+  $("printBtn").addEventListener("click", printReport);
+  // 각 표 위에 CSV 저장 버튼
+  document.querySelectorAll(".panel table.tbl[id]").forEach((t) => {
+    const wrap = t.closest(".table-wrap");
+    const bar = document.createElement("div");
+    bar.className = "table-tools";
+    bar.innerHTML = `<button type="button" data-csv="${t.id}" title="엑셀에서 열 수 있는 CSV로 저장">⬇ CSV</button>`;
+    wrap.parentNode.insertBefore(bar, wrap);
+  });
+  document.addEventListener("click", (e) => { const b = e.target.closest("[data-csv]"); if (b) downloadCsv(b.dataset.csv); });
   $("focus").addEventListener("change", (e) => { state.focus = e.target.value; render(); });
   $("focusYear").addEventListener("change", (e) => { state.focusYear = e.target.value ? Number(e.target.value) : null; render(); });
   document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => { state.tab = b.dataset.tab; syncUrl(); render(); }));

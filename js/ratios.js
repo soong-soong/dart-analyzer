@@ -8,18 +8,24 @@ export const RATIOS = [
   { key: "revenueGrowth", label: "매출액 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기 매출액 − 전기 매출액) ÷ 전기 매출액" },
   { key: "opIncomeGrowth", label: "영업이익 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기 영업이익 − 전기) ÷ 전기 (전기 적자면 표시 안 함)" },
   { key: "assetGrowth", label: "총자산 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기말 총자산 − 전기말) ÷ 전기말" },
+  { key: "equityGrowth", label: "자기자본 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기말 지배주주 자본 − 전기말) ÷ 전기말" },
+  { key: "niGrowth", label: "순이익 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기 순이익 − 전기) ÷ 전기 (전기 적자면 표시 안 함)" },
+  { key: "epsGrowth", label: "주당순이익 증가율", group: "성장성", unit: "%", better: "high", formula: "(당기 EPS − 전기 EPS) ÷ 전기 EPS (전기 음수면 표시 안 함)" },
 
   { key: "grossMargin", label: "매출총이익률", group: "수익성", unit: "%", better: "high", formula: "매출총이익 ÷ 매출액" },
   { key: "sgaRatio", label: "판관비율", group: "수익성", unit: "%", better: "low", formula: "판매비와관리비 ÷ 매출액" },
   { key: "opMargin", label: "영업이익률", group: "수익성", unit: "%", better: "high", formula: "영업이익 ÷ 매출액" },
   { key: "netMargin", label: "순이익률", group: "수익성", unit: "%", better: "high", formula: "당기순이익 ÷ 매출액" },
   { key: "roe", label: "ROE (지배기업)", group: "수익성", unit: "%", better: "high", formula: "지배주주 순이익 ÷ 지배주주 자본 (연결이 아니면 순이익 ÷ 자본)" },
+  { key: "roeComprehensive", label: "ROE (포괄이익 기준)", group: "수익성", unit: "%", better: "high", formula: "지배주주 총포괄이익 ÷ 지배주주 자본 (강의 3장 정의: 포괄이익 ÷ 자기자본)" },
   { key: "roeTotal", label: "ROE (연결실체)", group: "수익성", unit: "%", better: "high", formula: "당기순이익 ÷ 자본총계(비지배지분 포함)" },
   { key: "roa", label: "ROA (총자산순이익률)", group: "수익성", unit: "%", better: "high", formula: "당기순이익 ÷ 총자산" },
   { key: "roaOp", label: "총자산순영업이익률", group: "수익성", unit: "%", better: "high", formula: "(당기순이익 + 이자비용×(1−세율)) ÷ 총자산 · 이자비용은 현금흐름표 이자지급액으로 근사" },
 
   { key: "assetTurnover", label: "총자산회전율", group: "활동성", unit: "회", better: "high", formula: "매출액 ÷ 총자산" },
   { key: "ppeTurnover", label: "유형자산회전율", group: "활동성", unit: "회", better: "high", formula: "매출액 ÷ 유형자산" },
+  { key: "ncaTurnover", label: "비유동자산회전율", group: "활동성", unit: "회", better: "high", formula: "매출액 ÷ (자산총계 − 유동자산)" },
+  { key: "wcTurnover", label: "영업운전자본회전율", group: "활동성", unit: "회", better: "high", formula: "매출액 ÷ (매출채권 + 재고자산 − 매입채무). 운전자본이 0 이하이면 표시 안 함" },
   { key: "invDays", label: "재고 보유기간", group: "활동성", unit: "일", better: "low", formula: "재고자산 ÷ 매출원가 × 365" },
   { key: "arDays", label: "매출채권 회수기간", group: "활동성", unit: "일", better: "low", formula: "매출채권및기타채권 ÷ 매출액 × 365" },
   { key: "apDays", label: "매입채무 결제기간", group: "활동성", unit: "일", better: "high", formula: "매입채무및기타채무 ÷ 매출원가 × 365 (매입액 대신 매출원가로 근사)" },
@@ -41,7 +47,10 @@ export const RATIOS = [
 ];
 
 export function computeRatios(fin, basis = "avg") {
-  const { v, bal, has, taxRate } = helpers(fin, basis);
+  const { v, bal, balOf, has, taxRate } = helpers(fin, basis);
+  const wc = (y) => (v("receivables", y) == null && v("inventories", y) == null ? null
+    : (v("receivables", y) ?? 0) + (v("inventories", y) ?? 0) - (v("payables", y) ?? 0));
+  const nca = (y) => (v("totalAssets", y) == null || v("currentAssets", y) == null ? null : v("totalAssets", y) - v("currentAssets", y));
   const out = Object.fromEntries(RATIOS.map((r) => [r.key, {}]));
   for (const y of fin.years) {
     const p = y - 1;
@@ -55,18 +64,26 @@ export function computeRatios(fin, basis = "avg") {
     out.revenueGrowth[y] = growth(v("revenue", y), prev("revenue"));
     out.opIncomeGrowth[y] = growth(v("operatingIncome", y), prev("operatingIncome"));
     out.assetGrowth[y] = growth(v("totalAssets", y), prev("totalAssets"));
+    out.equityGrowth[y] = growth(v("equityOwners", y) ?? v("totalEquity", y), prev("equityOwners") ?? prev("totalEquity"));
+    out.niGrowth[y] = growth(v("netIncome", y), prev("netIncome"));
+    out.epsGrowth[y] = growth(v("eps", y), prev("eps"));
 
     out.grossMargin[y] = pct(gross, v("revenue", y));
     out.sgaRatio[y] = pct(v("sga", y), v("revenue", y));
     out.opMargin[y] = pct(v("operatingIncome", y), v("revenue", y));
     out.netMargin[y] = pct(v("netIncome", y), v("revenue", y));
     out.roe[y] = pct(roeNi, roeEq);
+    out.roeComprehensive[y] = isConsolidated && v("comprehensiveIncomeOwners", y) != null
+      ? pct(v("comprehensiveIncomeOwners", y), roeEq) : pct(v("comprehensiveIncome", y), bal("totalEquity", y));
     out.roeTotal[y] = pct(v("netIncome", y), bal("totalEquity", y));
     out.roa[y] = pct(v("netIncome", y), bal("totalAssets", y));
     out.roaOp[y] = v("netIncome", y) == null ? null : pct(v("netIncome", y) + (interest ?? 0) * (1 - taxRate(y)), bal("totalAssets", y));
 
     out.assetTurnover[y] = div(v("revenue", y), bal("totalAssets", y));
     out.ppeTurnover[y] = div(v("revenue", y), bal("ppe", y));
+    out.ncaTurnover[y] = div(v("revenue", y), balOf(nca, y));
+    const wcBal = balOf(wc, y);
+    out.wcTurnover[y] = wcBal > 0 ? div(v("revenue", y), wcBal) : null;
     const invDays = div(bal("inventories", y), v("costOfSales", y));
     const arDays = div(bal("receivables", y), v("revenue", y));
     const apDays = div(bal("payables", y), v("costOfSales", y));
