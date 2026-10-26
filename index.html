@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DART 재무 비교</title>
-  <meta name="description" content="DART Open API로 상장사 재무제표를 불러와 재무비율과 추이를 비교합니다." />
+  <meta name="description" content="DART Open API로 상장사 재무제표를 불러와 재무비율, ROE 분해, 손익 브리지, 현금흐름을 비교합니다." />
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js" defer></script>
   <script type="module" src="js/app.js"></script>
@@ -21,19 +21,31 @@
     <section class="controls card">
       <div class="search">
         <label for="q">기업 추가</label>
-        <input id="q" type="search" placeholder="기업명 또는 종목코드 (예: 삼성전자, 005930)" autocomplete="off" />
+        <input id="q" type="search" placeholder="기업명 또는 종목코드 (예: 신세계, 069960)" autocomplete="off" />
         <ul id="suggest" class="suggest" role="listbox" hidden></ul>
       </div>
       <div class="opts">
-        <label>재무제표
+        <label>분석 범위
           <select id="fs">
-            <option value="CFS">연결</option>
-            <option value="OFS">별도</option>
+            <option value="CFS">연결 (종속회사 포함)</option>
+            <option value="OFS">별도 (회사 단독)</option>
           </select>
         </label>
         <label>기준 사업연도
           <select id="year"></select>
         </label>
+        <label>잔액 기준
+          <select id="basis" title="ROE·ROA·회전율처럼 재무상태표 금액이 분모인 비율에 적용 (강의 4장: 평균·기초·기말 통일)">
+            <option value="avg">평균 (기초·기말)</option>
+            <option value="end">기말</option>
+            <option value="begin">기초</option>
+          </select>
+        </label>
+      </div>
+      <div class="presets">
+        <span class="muted small">빠른 비교</span>
+        <button type="button" data-preset="00136378,00428251,00120526">백화점 빅3</button>
+        <button type="button" data-preset="00126380,00164779">삼성전자 vs SK하이닉스</button>
       </div>
       <div id="chips" class="chips"></div>
       <p id="corpsInfo" class="muted small"></p>
@@ -45,44 +57,138 @@
       <h2>기업 개요 · 업종</h2>
       <div id="profiles" class="profiles"></div>
 
-      <h2>재무비율 비교 <span class="muted small" id="ratioYear"></span></h2>
-      <div class="card table-wrap"><table id="ratioTable" class="tbl"></table></div>
+      <nav class="tabs" role="tablist">
+        <button role="tab" data-tab="ratios" aria-selected="true">재무비율</button>
+        <button role="tab" data-tab="profit">수익성 분해</button>
+        <button role="tab" data-tab="bridge">손익 브리지</button>
+        <button role="tab" data-tab="cash">현금흐름</button>
+        <button role="tab" data-tab="stability">안정성·효율성</button>
+        <button role="tab" data-tab="gov">지배구조·배당</button>
+        <button role="tab" data-tab="statements">재무제표</button>
+      </nav>
 
-      <div class="grid2">
-        <div class="card">
-          <div class="chart-head">
-            <h3>재무 추이</h3>
-            <select id="metric">
-              <option value="revenue">매출액</option>
-              <option value="operatingIncome">영업이익</option>
-              <option value="netIncome">당기순이익</option>
-              <option value="totalAssets">자산총계</option>
-              <option value="totalLiabilities">부채총계</option>
-              <option value="totalEquity">자본총계</option>
-              <option value="operatingCashFlow">영업활동현금흐름</option>
-            </select>
+      <div id="focusBar" class="focus-bar">
+        <label>기업 <select id="focus"></select></label>
+        <label>연도 <select id="focusYear"></select></label>
+        <span id="focusNote" class="muted small"></span>
+      </div>
+
+      <!-- 재무비율 -->
+      <div class="panel" data-panel="ratios">
+        <p class="muted small" id="ratioYear"></p>
+        <div class="card table-wrap"><table id="ratioTable" class="tbl"></table></div>
+        <p class="muted small">비율 이름에 마우스를 올리면 계산식이 보입니다. 초록색은 비교 기업 중 가장 좋은 값입니다.</p>
+        <div class="grid2">
+          <div class="card">
+            <div class="chart-head">
+              <h3>재무 추이</h3>
+              <select id="metric">
+                <option value="revenue">매출액</option>
+                <option value="grossProfit">매출총이익</option>
+                <option value="operatingIncome">영업이익</option>
+                <option value="netIncome">당기순이익</option>
+                <option value="netIncomeOwners">지배주주 순이익</option>
+                <option value="totalAssets">자산총계</option>
+                <option value="totalEquity">자본총계</option>
+                <option value="borrowings">차입금+사채</option>
+                <option value="leaseLiabilities">리스부채</option>
+                <option value="operatingCashFlow">영업활동현금흐름</option>
+              </select>
+            </div>
+            <div class="chart-box"><canvas id="trendChart"></canvas></div>
           </div>
-          <div class="chart-box"><canvas id="trendChart"></canvas></div>
-        </div>
-        <div class="card">
-          <div class="chart-head">
-            <h3>비율 추이</h3>
-            <select id="ratioSel"></select>
+          <div class="card">
+            <div class="chart-head">
+              <h3>비율 추이</h3>
+              <select id="ratioSel"></select>
+            </div>
+            <div class="chart-box"><canvas id="ratioChart"></canvas></div>
           </div>
-          <div class="chart-box"><canvas id="ratioChart"></canvas></div>
         </div>
       </div>
 
-      <h2>요약 재무제표
-        <select id="focus" class="inline-select"></select>
-      </h2>
-      <div class="card table-wrap"><table id="stmtTable" class="tbl"></table></div>
+      <!-- 수익성 분해 -->
+      <div class="panel" data-panel="profit" hidden>
+        <div class="grid2">
+          <div class="card">
+            <h3>듀퐁 분석: ROA = 순이익률 × 총자산회전율</h3>
+            <p class="muted small">점은 연도별 위치, 큰 점이 최근 연도. 오른쪽일수록 자산을 빨리 돌리고(유통업형), 위쪽일수록 많이 남깁니다(고마진형).</p>
+            <div class="chart-box tall"><canvas id="dupontChart"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>ROE 분해 트리 <span id="treeTitle" class="muted small"></span></h3>
+            <div id="roeTree" class="tree"></div>
+          </div>
+        </div>
+        <h3 class="section-title">ROE 결정요인 비교 <span class="muted small" id="roeCompareNote"></span></h3>
+        <div class="card table-wrap"><table id="roeTable" class="tbl"></table></div>
+        <p class="muted small">강의 4장: ROE = ROIC + (ROIC − 세후 순차입이자율) × 순재무부채/자기자본. 연결실체(비지배지분 포함) 기준이며, 금융비용에 리스 이자가 포함되므로 재무부채에 리스부채를 포함했습니다. 재무자산 = 현금성자산 + 단기금융상품 + 단기 당기손익-공정가치 금융자산.</p>
+      </div>
+
+      <!-- 손익 브리지 -->
+      <div class="panel" data-panel="bridge" hidden>
+        <div class="card">
+          <h3>영업이익에서 지배주주 순이익까지 <span id="bridgeTitle" class="muted small"></span></h3>
+          <div class="chart-box tall"><canvas id="bridgeChart"></canvas></div>
+          <div id="bridgeNote" class="note"></div>
+        </div>
+        <h3 class="section-title">연도별 손익 흐름 <span class="muted small">(억원)</span></h3>
+        <div class="card table-wrap"><table id="bridgeTable" class="tbl"></table></div>
+        <h3 class="section-title">기업 비교 <span class="muted small" id="bridgeCompareNote"></span></h3>
+        <div class="card table-wrap"><table id="bridgeCompare" class="tbl"></table></div>
+        <p class="muted small">"기타손익 제외 순이익"은 강의 5장 방식의 근사치입니다: 기타수익·기타비용 전체를 일시적 손익으로 보고 세후 금액을 되돌렸습니다. 정확한 지속적 이익은 주석에서 항목별로 판단해야 합니다.</p>
+      </div>
+
+      <!-- 현금흐름 -->
+      <div class="panel" data-panel="cash" hidden>
+        <div class="grid2">
+          <div class="card">
+            <h3>FCF 창출과 배분 <span id="fcfTitle" class="muted small"></span></h3>
+            <div class="chart-box tall"><canvas id="fcfChart"></canvas></div>
+          </div>
+          <div class="card">
+            <h3>순이익 vs 영업현금흐름 <span class="muted small">이익의 질</span></h3>
+            <div class="chart-box tall"><canvas id="qualityChart"></canvas></div>
+          </div>
+        </div>
+        <h3 class="section-title">현금흐름 요약 <span class="muted small" id="cfSummaryNote"></span></h3>
+        <div class="card table-wrap"><table id="cfSummary" class="tbl"></table></div>
+        <h3 class="section-title">기업 비교 <span class="muted small" id="cfCompareNote"></span></h3>
+        <div class="card table-wrap"><table id="cfCompare" class="tbl"></table></div>
+        <details class="card details">
+          <summary>현금흐름표 전체 항목 보기 <span id="cfFullTitle" class="muted small"></span></summary>
+          <p class="muted small">DART 공시 값 그대로입니다. 회사마다 유출을 양수로 적기도, 음수로 적기도 하니 각 구간 합계로 방향을 확인하세요.</p>
+          <div class="table-wrap"><table id="cfFull" class="tbl"></table></div>
+        </details>
+      </div>
+
+      <!-- 안정성·효율성 -->
+      <div class="panel" data-panel="stability" hidden>
+        <div class="card">
+          <h3>현금전환주기 <span class="muted small" id="cccNote"></span></h3>
+          <div class="chart-box"><canvas id="cccChart"></canvas></div>
+          <p class="muted small">백화점처럼 특약매입(수수료 매출) 비중이 높으면 매출원가가 작게 잡혀 재고·매입채무 기간이 길게 계산됩니다. 회사 간 비교 시 매출 인식 방식 차이를 함께 고려하세요.</p>
+        </div>
+        <h3 class="section-title">안정성·효율성 비교</h3>
+        <div class="card table-wrap"><table id="stabTable" class="tbl"></table></div>
+      </div>
+
+      <!-- 지배구조 -->
+      <div class="panel" data-panel="gov" hidden>
+        <div id="govCards" class="profiles"></div>
+      </div>
+
+      <!-- 재무제표 -->
+      <div class="panel" data-panel="statements" hidden>
+        <p id="sourceLinks" class="muted small"></p>
+        <div class="card table-wrap"><table id="stmtTable" class="tbl"></table></div>
+      </div>
     </section>
   </main>
 
   <footer class="wrap foot muted small">
-    데이터: <a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">금융감독원 DART Open API</a> ·
-    투자 판단의 근거로 사용하지 마세요. 금융업(은행·보험 등)은 계정 구조가 달라 일부 비율이 표시되지 않습니다.
+    데이터: <a href="https://opendart.fss.or.kr" target="_blank" rel="noopener">금융감독원 DART Open API</a> (사업보고서 본문 재무제표·정기보고서 주요정보) ·
+    투자 판단의 근거로 사용하지 마세요. 계정은 IFRS 태그 기준으로 자동 매칭하므로 일부 기업은 값이 비거나 주석과 다를 수 있습니다.
   </footer>
 </body>
 </html>
