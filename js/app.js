@@ -1,12 +1,12 @@
 import { industryName, isFinancial } from "./ksic.js";
 import { RATIOS, computeRatios } from "./ratios.js";
-import { bridge, cashFlow, roeTree, dupont, flags, auditFlags, equityGrowth, valueCreation, valuation } from "./analysis.js";
+import { bridge, cashFlow, roeTree, dupont, flags, auditFlags, equityGrowth, valueCreation, valuation, grossAdjust } from "./analysis.js";
 import { esc, eok, eokLabel, fmt } from "./core.js";
 
 const MAX = 4;
 const COLORS = ["#2f6fed", "#e8743b", "#19a979", "#9b59b6"];
 const DEFAULT_CORPS = ["00136378", "00428251"]; // 첫 방문 시 예시: 신세계, 현대백화점
-const TABS = ["ratios", "profit", "bridge", "cash", "stability", "gov", "statements"];
+const TABS = ["ratios", "profit", "bridge", "cash", "stability", "retail", "gov", "statements"];
 const SINGLE_COMPANY_TABS = new Set(["profit", "bridge", "cash", "statements"]);
 
 const STATEMENT_ROWS = [
@@ -25,7 +25,7 @@ const ROW_BASE = Object.fromEntries(STATEMENT_ROWS.map(([k]) => [k,
   ["totalAssets", "currentAssets", "cash", "financialAssets", "receivables", "inventories", "ppe", "rightOfUse", "totalLiabilities",
     "currentLiabilities", "payables", "borrowings", "leaseLiabilities", "totalEquity", "equityOwners"].includes(k) ? "totalAssets" : "revenue"]));
 
-const TAB_LABEL = { ratios: "재무비율", profit: "수익성 분해", bridge: "손익 브리지", cash: "현금흐름", stability: "안정성·효율성", gov: "지배구조·배당", statements: "재무제표" };
+const TAB_LABEL = { ratios: "재무비율", profit: "수익성 분해", bridge: "손익 브리지", cash: "현금흐름", stability: "안정성·효율성", retail: "유통·총매출 보정", gov: "지배구조·배당", statements: "재무제표" };
 
 const $ = (id) => document.getElementById(id);
 const toEok = (won) => (won == null ? null : won / 1e8);
@@ -33,7 +33,7 @@ const toEok = (won) => (won == null ? null : won / 1e8);
 // 사용자가 입력하는 값(무위험이자율·베타·주가)은 이 브라우저에만 저장
 const PREFS_KEY = "dart-analyzer:prefs";
 const prefs = (() => {
-  const base = { rf: 3, mrp: 5, beta: {}, price: {} };
+  const base = { rf: 3, mrp: 5, beta: {}, price: {}, gross: {} };
   try { return { ...base, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") }; } catch { return base; }
 })();
 const savePrefs = () => { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* 저장 불가 환경 */ } };
@@ -293,7 +293,7 @@ function render() {
   document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
   document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== state.tab; });
   ({ ratios: renderRatios, profit: renderProfit, bridge: renderBridge, cash: renderCash,
-    stability: renderStability, gov: renderGov, statements: renderStatements })[state.tab]();
+    stability: renderStability, retail: renderRetail, gov: renderGov, statements: renderStatements })[state.tab]();
 }
 
 function renderFocusBar() {
@@ -727,6 +727,66 @@ function renderStability() {
   ratioTable("stabTable", ["활동성", "안정성"]);
 }
 
+// --- 유통·총매출 보정 탭
+const grossKey = (code, y) => `${code}|${state.fs}|${y}`;
+const grossOf = (code, y) => { const x = prefs.gross[grossKey(code, y)]; return x > 0 ? x * 1e8 : null; };
+
+function renderRetail() {
+  const items = loaded();
+  const years = [...new Set(items.flatMap((s) => s.fin.years))].sort((a, b) => a - b);
+  $("grossNote").textContent = `${state.fs === "CFS" ? "연결" : "별도"} · 단위 억원 · 회색 숫자는 공시 매출`;
+  $("grossInputs").innerHTML = `<thead><tr><th>기업</th>${years.map((y) => `<th>${y}</th>`).join("")}</tr></thead><tbody>${
+    items.map((s) => `<tr><td style="color:${s.color}">${esc(s.name)}</td>${years.map((y) => {
+      const rev = s.fin.data.revenue?.[y];
+      if (rev == null) return "<td>–</td>";
+      const x = prefs.gross[grossKey(s.code, y)];
+      return `<td><input class="cell-input wide" type="number" step="1" min="0" data-gross="${grossKey(s.code, y)}" value="${x ?? ""}" placeholder="총매출" aria-label="${esc(s.name)} ${y} 총매출액" /><div class="muted small">${eok(rev)}</div></td>`;
+    }).join("")}</tr>`).join("")
+  }</tbody>`;
+
+  const rs = items.map((s) => { const y = yearFor(s); return grossAdjust(s.fin, y, grossOf(s.code, y), grossOf(s.code, y - 1), state.basis); });
+  const share = (k) => { const xs = rs.map((r) => r?.[k]); const t = xs.every((x) => x > 0) ? xs.reduce((a, b) => a + b, 0) : null; return xs.map((x) => (t ? (x / t) * 100 : null)); };
+  const shareNet = share("rev"), shareGross = share("gross");
+  const rows = [
+    ["규모"],
+    ["매출액 (공시)", (r) => eokLabel(toEok(r?.rev))],
+    ["총매출액 (IR 입력)", (r) => (r?.gross ? eokLabel(toEok(r.gross)) : `<span class="muted">입력 필요</span>`)],
+    ["공시매출 ÷ 총매출", (r) => fmt(r?.netToGross, "%"), "회사 몫의 비율. 특약매입 비중이 높을수록 낮다"],
+    ["비교 기업 내 점유율 (공시 → 총매출)", (r, i) => `${fmt(shareNet[i], "%")} → ${fmt(shareGross[i], "%")}`, "선택한 기업들의 합을 100으로 본 비중. 총매출은 모든 기업이 입력돼야 계산"],
+    ["매출 성장률 (공시 → 총매출)", "growth", "%", "총매출 성장률은 전년 총매출도 입력해야 계산"],
+    ["수익성"],
+    ["판관비율 (공시 → 총매출)", "sga", "%"],
+    ["영업이익률 (공시 → 총매출)", "op", "%"],
+    ["매출총이익률 (공시 → 총매출)", "gpMargin", "%", "총매출 기준은 총매출 1원당 회사에 남는 마진 (실질 수수료율에 가까움)"],
+    ["활동성"],
+    ["유형자산회전율 (공시 → 총매출)", "ppeTurnover", "회"],
+    ["매입채무 결제기간 (공시 → 총액 환산)", "apDays", "일", "총액 환산 매출원가 = 매출원가 + (총매출 − 공시매출)"],
+    ["안정성"],
+    ["차입금비율", (r) => fmt(r?.borrowingRatio, "%"), "(차입금 + 사채) ÷ 자본총계"],
+    ["차입금비율 (리스 포함)", (r) => fmt(r?.borrowingLeaseRatio, "%"), "(차입금 + 사채 + 리스부채) ÷ 자본총계"],
+    ["차입부채 중 리스 비중", (r) => fmt(r?.leaseShare, "%"), "리스부채 ÷ (차입금 + 사채 + 리스부채). 매장 임차가 많을수록 높다"],
+  ];
+  $("retailTable").innerHTML = `<thead><tr><th>지표</th>${headCells(items)}</tr></thead><tbody>${rows.map(([label, a, unit, tip]) => {
+    if (a === undefined) return `<tr class="group"><td colspan="${items.length + 1}">${label}</td></tr>`;
+    const name = (t) => (t ? `<span class="formula" title="${esc(t)}">${label}</span>` : label);
+    if (typeof a === "function") return `<tr><td>${name(unit)}</td>${rs.map((r, i) => `<td>${r ? a(r, i) : "–"}</td>`).join("")}</tr>`;
+    return `<tr><td>${name(tip)}</td>${rs.map((r) => {
+      if (!r) return "<td>–</td>";
+      const [n, g] = r[a];
+      return `<td><span class="muted">${fmt(n, unit)}</span> → ${g == null ? `<span class="muted">–</span>` : `<strong>${fmt(g, unit)}</strong>`}</td>`;
+    }).join("")}</tr>`;
+  }).join("")}</tbody>`;
+
+  const datasets = items.flatMap((s) => {
+    const per = years.map((y) => (s.fin.years.includes(y) ? grossAdjust(s.fin, y, grossOf(s.code, y), null, state.basis) : null));
+    return [
+      { label: `${s.name} (총매출)`, data: per.map((r) => r?.op[1] ?? null), borderColor: s.color, backgroundColor: s.color, spanGaps: true },
+      { label: `${s.name} (공시)`, data: per.map((r) => r?.op[0] ?? null), borderColor: s.color, backgroundColor: s.color, borderDash: [5, 4], pointRadius: 2 },
+    ];
+  });
+  chart("retailChart", { type: "line", data: { labels: years, datasets }, options: baseOptions((v) => fmt(v, "%")) });
+}
+
 // --- 지배구조·배당 탭
 function renderGov() {
   $("govCards").innerHTML = state.selected.map((s) => {
@@ -850,6 +910,13 @@ function setupControls() {
   // 표 안의 베타·주가 입력칸 (입력을 마치고 칸을 벗어나면 다시 계산)
   document.addEventListener("change", (e) => {
     const el = e.target;
+    if (el.dataset?.gross) {
+      const x = parseFloat(el.value);
+      if (Number.isFinite(x) && x > 0) prefs.gross[el.dataset.gross] = x; else delete prefs.gross[el.dataset.gross];
+      savePrefs();
+      render();
+      return;
+    }
     const kind = el.dataset?.beta ? "beta" : el.dataset?.price ? "price" : null;
     if (!kind) return;
     const code = el.dataset[kind];

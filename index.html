@@ -63,6 +63,7 @@
         <button role="tab" data-tab="bridge">손익 브리지</button>
         <button role="tab" data-tab="cash">현금흐름</button>
         <button role="tab" data-tab="stability">안정성·효율성</button>
+        <button role="tab" data-tab="retail">유통·총매출 보정</button>
         <button role="tab" data-tab="gov">지배구조·배당</button>
         <button role="tab" data-tab="statements">재무제표</button>
         <button type="button" id="printBtn" class="tab-action" title="현재 탭을 인쇄하거나 PDF로 저장">🖨 인쇄·PDF</button>
@@ -214,6 +215,27 @@
         </div>
         <h3 class="section-title">안정성·효율성 비교</h3>
         <div class="card table-wrap"><table id="stabTable" class="tbl"></table></div>
+      </div>
+
+      <!-- 유통·총매출 보정 -->
+      <div class="panel" data-panel="retail" hidden>
+        <div class="card">
+          <h3>IR 총매출액 입력 <span class="muted small" id="grossNote"></span></h3>
+          <p class="muted small">백화점은 특약매입(위탁) 매출을 수수료만 순액으로 인식해 공시 매출이 작게 잡힙니다. 회사 IR 자료의 총매출액(특약매입분 총액 환산)을 억원 단위로 입력하면 아래 비율을 총매출 기준으로 다시 계산합니다.
+          연결/별도 범위가 IR 자료와 같은지 확인하세요 (입력값은 연결·별도별로 따로, 이 브라우저에만 저장됩니다).</p>
+          <div class="table-wrap"><table id="grossInputs" class="tbl"></table></div>
+        </div>
+        <h3 class="section-title">공시 기준 vs 총매출 기준 <span class="muted small">각 사 비교 연도</span></h3>
+        <div class="card table-wrap"><table id="retailTable" class="tbl"></table></div>
+        <p class="muted small">총액 환산 매출원가 = 매출원가 + (총매출 − 공시매출): 특약 브랜드에 정산할 금액까지 원가로 보고 매입채무 결제기간을 다시 계산했습니다. 공시 매출원가로 나누면 백화점의 결제기간이 비현실적으로 길게 나옵니다.
+        공시매출 ÷ 총매출은 매출 중 회사 몫의 비율로, 특약매입 비중이 높을수록 낮아집니다.</p>
+        <div class="card">
+          <div class="chart-head">
+            <h3>영업이익률 추이</h3>
+            <span class="muted small">실선 총매출 기준 · 점선 공시 매출 기준</span>
+          </div>
+          <div class="chart-box"><canvas id="retailChart"></canvas></div>
+        </div>
       </div>
 
       <!-- 지배구조 -->

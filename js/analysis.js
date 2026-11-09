@@ -240,3 +240,35 @@ export function auditFlags(gov) {
   }
   return out;
 }
+
+/**
+ * 총매출 보정 (유통업): 특약매입분을 순액(수수료)으로 인식해 작게 잡힌 공시 매출을
+ * IR 자료의 총매출액으로 바꿔 규모·이익률·회전율을 다시 계산한다.
+ * @param gross     IR 총매출액(원). 없으면 공시 기준 값만 채운다
+ * @param grossPrev 전년 IR 총매출액(원) — 성장률용
+ */
+export function grossAdjust(fin, y, gross, grossPrev, basis = "avg") {
+  const { v, bal, has } = helpers(fin, basis);
+  const rev = v("revenue", y);
+  if (rev == null) return null;
+  const g = gross > 0 ? gross : null;
+  const cost = v("costOfSales", y);
+  const gp = v("grossProfit", y) ?? (cost != null ? rev - cost : null);
+  // 총액 환산 매출원가 = 매출원가 + (총매출 − 공시매출): 특약 브랜드에 정산해 줄 금액까지 원가로 본다
+  const costGross = g == null || cost == null ? null : cost + (g - rev);
+  const days = (x) => (x == null ? null : x * 365);
+  const borrowings = v("borrowings", y), lease = v("leaseLiabilities", y);
+  return {
+    rev, gross: g,
+    netToGross: pct(rev, g),
+    sga: [pct(v("sga", y), rev), pct(v("sga", y), g)],
+    op: [pct(v("operatingIncome", y), rev), pct(v("operatingIncome", y), g)],
+    gpMargin: [pct(gp, rev), pct(gp, g)],
+    ppeTurnover: [div(rev, bal("ppe", y)), div(g, bal("ppe", y))],
+    apDays: [days(div(bal("payables", y), cost)), days(div(bal("payables", y), costGross))],
+    growth: [growth(rev, has(y - 1) ? v("revenue", y - 1) : null), growth(g, grossPrev > 0 ? grossPrev : null)],
+    borrowingRatio: pct(borrowings, v("totalEquity", y)),
+    borrowingLeaseRatio: pct(sum(borrowings, lease), v("totalEquity", y)),
+    leaseShare: pct(lease, sum(borrowings, lease)),
+  };
+}
